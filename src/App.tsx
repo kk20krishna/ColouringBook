@@ -16,7 +16,9 @@ import {
   CheckCircle2,
   AlertCircle,
   RefreshCw,
-  Layers
+  Layers,
+  Image as ImageIcon,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -208,6 +210,8 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [pages, setPages] = useState<GeneratedPage[]>([]);
+  const [uploadedPhoto, setUploadedPhoto] = useState<string | null>(null);
+  const [ghibliImage, setGhibliImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Initialize Gemini
@@ -259,6 +263,57 @@ export default function App() {
     }
   };
 
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setUploadedPhoto(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const generateGhibliImage = async (base64Photo: string): Promise<string> => {
+    const prompt = "A beautiful Studio Ghibli style illustration based on the provided image. Vibrant colors, soft lighting, whimsical atmosphere, hand-drawn aesthetic, high quality.";
+    
+    try {
+      const response = await ai.models.generateContent({
+        model: MODEL_NAME,
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                data: base64Photo.split(',')[1],
+                mimeType: "image/png"
+              }
+            },
+            { text: prompt }
+          ],
+        },
+        config: {
+          imageConfig: {
+            aspectRatio: "1:1",
+          },
+        },
+      });
+
+      let base64 = '';
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          base64 = `data:image/png;base64,${part.inlineData.data}`;
+          break;
+        }
+      }
+
+      if (!base64) throw new Error("No Ghibli image data received from AI");
+      return base64;
+    } catch (err) {
+      console.error("Error generating Ghibli image:", err);
+      throw err;
+    }
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!childName || !theme) return;
@@ -266,11 +321,18 @@ export default function App() {
     setIsGenerating(true);
     setProgress(0);
     setPages([]);
+    setGhibliImage(null);
     setError(null);
 
     const newPages: GeneratedPage[] = [];
     
     try {
+      // Generate Ghibli image if photo is uploaded
+      if (uploadedPhoto) {
+        const ghibli = await generateGhibliImage(uploadedPhoto);
+        setGhibliImage(ghibli);
+      }
+
       // Generate pages one by one to show progress and avoid hitting rate limits too hard
       for (let i = 0; i < pageCount; i++) {
         const page = await generateSinglePage(i, theme);
@@ -320,9 +382,10 @@ export default function App() {
     doc.setTextColor(textRgb[0], textRgb[1], textRgb[2], 0.7);
     doc.text(`Theme: ${theme}`, pageWidth / 2, 130, { align: 'center' });
 
-    // Add a decorative border or simple illustration if we had one, 
-    // but for now let's use the first generated image as a small preview on cover
-    if (pages.length > 0) {
+    // Add Ghibli image if it exists, otherwise use first page preview
+    if (ghibliImage) {
+      doc.addImage(ghibliImage, 'PNG', pageWidth / 4, 150, pageWidth / 2, pageWidth / 2);
+    } else if (pages.length > 0) {
       doc.addImage(pages[0].base64, 'PNG', pageWidth / 4, 150, pageWidth / 2, pageWidth / 2);
     }
 
@@ -456,6 +519,39 @@ export default function App() {
                   ))}
                 </div>
               </div>
+
+            {/* Photo Upload Section */}
+            <div className="space-y-4">
+              <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 uppercase tracking-wider">
+                <ImageIcon className="w-4 h-4 text-orange-500" />
+                Cover Photo (Optional - Will be Ghibli-fied!)
+              </label>
+              <div className="flex items-center gap-6">
+                <label className="flex flex-col items-center justify-center w-32 h-32 border-2 border-dashed border-slate-200 rounded-2xl cursor-pointer hover:bg-slate-50 transition-all group overflow-hidden">
+                  {uploadedPhoto ? (
+                    <img src={uploadedPhoto} className="w-full h-full object-cover" alt="Upload preview" />
+                  ) : (
+                    <>
+                      <Upload className="w-6 h-6 text-slate-400 group-hover:text-orange-500 mb-2" />
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Upload</span>
+                    </>
+                  )}
+                  <input type="file" className="hidden" accept="image/*" onChange={handlePhotoUpload} />
+                </label>
+                {uploadedPhoto && (
+                  <button 
+                    type="button" 
+                    onClick={() => setUploadedPhoto(null)}
+                    className="text-xs font-bold text-red-500 hover:text-red-600 uppercase tracking-wider"
+                  >
+                    Remove Photo
+                  </button>
+                )}
+                <p className="text-xs text-slate-400 max-w-[200px]">
+                  Upload a photo to generate a magical Studio Ghibli style illustration for your cover page!
+                </p>
+              </div>
+            </div>
 
             {/* Template Selection */}
             <div className="space-y-6">
@@ -652,6 +748,13 @@ export default function App() {
                 style={{ backgroundColor: bgColor }}
               >
                 <BookOpen className="w-12 h-12 mb-4" style={{ color: accentColor }} />
+                
+                {ghibliImage ? (
+                  <div className="w-32 h-32 rounded-xl overflow-hidden mb-4 border-2 border-white/50 shadow-lg">
+                    <img src={ghibliImage} className="w-full h-full object-cover" alt="Ghibli cover" />
+                  </div>
+                ) : null}
+
                 <h3 className="text-xl font-bold mb-1" style={{ color: textColor }}>{childName}'s</h3>
                 <p className="text-sm uppercase tracking-widest font-medium opacity-60" style={{ color: textColor }}>Coloring Book</p>
                 <div className={`mt-6 flex items-center gap-2 text-xs font-mono bg-white/50 px-3 py-1 rounded-full`} style={{ color: accentColor }}>
